@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ai-telegram-bot
+    env: python
+    buildCommand: ""
+    startCommand: "python main.py"
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_TOKEN
+        value: 8436321772:AAGFWjMkcHmeGGMYCPghlzfm7AYBhwp-GR0
