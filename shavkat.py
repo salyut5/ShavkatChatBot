@@ -1,16 +1,22 @@
-import asyncio
 import logging
 import torch
+import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters import Command
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
+from aiohttp import web
 
-# 🔑 Telegram token
-TELEGRAM_TOKEN = "8436321772:AAGFWjMkcHmeGGMYCPghlzfm7AYBhwp-GR0"
+# 🔑 Muhit o'zgaruvchilari (Render uchun)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8436321772:AAGFWjMkcHmeGGMYCPghlzfm7AYBhwp-GR0")
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")  # Render avtomatik beradi
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
+# 🔹 Logging
 logging.basicConfig(level=logging.INFO)
 
+# 🔹 Aiogram sozlamalari
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
@@ -23,22 +29,19 @@ model_buttons = InlineKeyboardMarkup(
     ]
 )
 
-# 🔹 Foydalanuvchilarning tanlagan modeli va cache
+# 🔹 Model va cache
 user_models = {}
 user_cache = {}
 
-# 🔹 Modellarni yuklash
 print("Modellarni yuklash... Iltimos kuting.")
 
-# BlenderBot 90M
+# 🔹 Modellarni yuklash
 blender_tokenizer = AutoTokenizer.from_pretrained("facebook/blenderbot-90M", cache_dir="models/blenderbot")
 blender_model = AutoModelForSeq2SeqLM.from_pretrained("facebook/blenderbot-90M", cache_dir="models/blenderbot")
 
-# DialoGPT-medium
 dialogpt_tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium", cache_dir="models/DialogGPT")
 dialogpt_model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium", cache_dir="models/DialogGPT")
 
-# MT5-small (ko‘p tilli, o‘zbekcha)
 mt5_small_tokenizer = AutoTokenizer.from_pretrained("google/mt5-small", cache_dir="models/mt5-small")
 mt5_small_model = AutoModelForSeq2SeqLM.from_pretrained("google/mt5-small", cache_dir="models/mt5-small")
 
@@ -58,14 +61,11 @@ async def send_welcome(message: types.Message):
 async def process_model(callback: types.CallbackQuery):
     selected_model = callback.data
     user_models[callback.from_user.id] = selected_model
-
-    # Cache ni tozalash
     user_cache[callback.from_user.id] = {}
-
     await callback.answer(text=f"Model tanlandi: {callback.data.split('_')[1]}")
     await callback.message.reply("Endi xabaringizni yozing, AI javob beradi...")
 
-# 🔹 Foydalanuvchi xabarini AI ga yuborish
+# 🔹 Xabarlarni qayta ishlash
 @dp.message()
 async def ai_reply(message: types.Message):
     user_id = message.from_user.id
@@ -89,7 +89,6 @@ async def ai_reply(message: types.Message):
 
     answer = ""
     try:
-        # 🔹 Model tanlash va javob olish
         if selected_model == "model_blender":
             tokenizer = blender_tokenizer
             model = blender_model
@@ -109,8 +108,6 @@ async def ai_reply(message: types.Message):
         elif selected_model == "model_mt5":
             tokenizer = mt5_small_tokenizer
             model = mt5_small_model
-
-            # MT5 uchun chat prompti (o‘zbek tilida javob)
             prompt = f"Generate a conversational answer in Uzbek: {text}"
             inputs = tokenizer(prompt, return_tensors="pt")
 
@@ -125,21 +122,39 @@ async def ai_reply(message: types.Message):
                     top_p=0.9,
                     top_k=50
                 )
-
             answer = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
         if not answer:
             answer = "Uzr, hozir javob topilmadi. Iltimos qayta urinib ko‘ring."
-
     except Exception as e:
         print(f"Xato yuz berdi: {e}")
         answer = "Uzr, xatolik yuz berdi. Iltimos qayta urinib ko‘ring."
 
-    # Cache ga saqlash
     user_cache[user_id][text] = answer
     await message.reply(answer)
 
-# 🔹 Botni ishga tushirish
+# 🔹 Webhook server (Render uchun)
+async def on_startup(app):
+    await bot.set_webhook(WEBHOOK_URL)
+    print(f"Webhook o‘rnatildi: {WEBHOOK_URL}")
+
+async def on_shutdown(app):
+    await bot.delete_webhook()
+    await bot.session.close()
+
+async def handle_webhook(request):
+    data = await request.json()
+    update = types.Update(**data)
+    await dp.feed_update(bot, update)
+    return web.Response()
+
+def main():
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+
 if __name__ == "__main__":
-    print("🤖 Bot ishga tushdi...")
-    asyncio.run(dp.start_polling(bot))
+    print("🚀 Webhook bot ishga tushdi...")
+    main()
